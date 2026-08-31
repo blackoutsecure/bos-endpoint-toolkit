@@ -1,5 +1,7 @@
 # Blackout Secure Endpoint Toolkit
 
+[![Made by BlackoutSecure](https://img.shields.io/badge/made%20by-BlackoutSecure-1f1f1f)](https://github.com/blackoutsecure)
+
 Cross-platform scripts and operational guidance for managing Windows, Linux,
 and macOS endpoints. The toolkit is suitable for Intune-adjacent administration
 and general endpoint maintenance; it does not require a specific management
