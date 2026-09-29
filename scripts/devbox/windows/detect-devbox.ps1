@@ -6,7 +6,7 @@ Detects whether the Windows devbox remediation is installed and healthy.
 .DESCRIPTION
 Use this script as the detection script for Microsoft Intune Remediations. It
 checks the ProgramData state root, version file, embedded worker, configured
-live VHDX, backup path parent, and scheduled tasks.
+live VHDX and configured capacity, backup path parent, and scheduled tasks.
 
 .NOTES
 Supported platform: Windows PowerShell 5.1 on Windows 10/11 endpoints.
@@ -23,12 +23,16 @@ $ErrorActionPreference = 'Stop'
 # ==================== CONFIGURABLE VARIABLES ====================
 $DevboxName = 'devbox'
 $RequiredVersion = '2.1.0'
+$DevboxSizeGB = 100 #Keep this target aligned with remediate-devbox.ps1.
 $DevboxStateRoot = Join-Path $env:ProgramData $DevboxName
 # ================================================================
 
 $Problems = [System.Collections.Generic.List[string]]::new()
 
 try {
+    if ($DevboxSizeGB -lt 50 -or $DevboxSizeGB -gt 65536 -or $DevboxSizeGB -ne [math]::Floor($DevboxSizeGB)) {
+        throw 'DevboxSizeGB must be an integer between 50 and 65536 (Dev Drive requires at least 50 GB).'
+    }
     $ConfigPath = Join-Path $DevboxStateRoot 'config.json'
     $VersionPath = Join-Path $DevboxStateRoot 'version.txt'
     $WorkerPath = Join-Path $DevboxStateRoot 'devbox-worker.ps1'
@@ -40,6 +44,34 @@ try {
             $Config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
             if (-not (Test-Path -LiteralPath $Config.liveVhdx)) {
                 $Problems.Add('LIVE_VHDX_MISSING')
+            } else {
+                try {
+                    $Image = Get-DiskImage -ImagePath $Config.liveVhdx
+                    $TargetSize = [uint64]($DevboxSizeGB * 1GB)
+                    if ([uint64]$Image.Size -lt $TargetSize) {
+                        $Problems.Add('CAPACITY_BELOW_TARGET')
+                    } elseif ([uint64]$Image.Size -gt $TargetSize) {
+                        $Problems.Add('CAPACITY_SHRINK_UNSUPPORTED')
+                    }
+                    if (-not $Image.Attached) {
+                        $Problems.Add('VOLUME_CAPACITY_UNVERIFIED')
+                    } else {
+                        $Disk = $Image | Get-Disk
+                        $DataPartitions = @(Get-Partition -DiskNumber $Disk.Number | Where-Object { $_.Type -eq 'Basic' })
+                        if ($DataPartitions.Count -ne 1) {
+                            $Problems.Add('VOLUME_LAYOUT_UNEXPECTED')
+                        } else {
+                            $Supported = Get-PartitionSupportedSize -DiskNumber $Disk.Number -PartitionNumber $DataPartitions[0].PartitionNumber
+                            if ([uint64]$Supported.SizeMax -eq 0) {
+                                $Problems.Add('VOLUME_CAPACITY_UNVERIFIED')
+                            } elseif ([uint64]$DataPartitions[0].Size -lt [uint64]$Supported.SizeMax) {
+                                $Problems.Add('VOLUME_CAPACITY_BELOW_MAXIMUM')
+                            }
+                        }
+                    }
+                } catch {
+                    $Problems.Add('CAPACITY_CHECK_FAILED')
+                }
             }
             if ([string]::IsNullOrWhiteSpace([string]$Config.backupRoot)) {
                 $Problems.Add('BACKUP_ROOT_UNRESOLVED')

@@ -1,10 +1,12 @@
 #!/bin/bash
 # devbox macOS v3.5.0 - Intune-safe installer, repairer, backup, validation, and restore utility
+# Default capacity is 100 GB. Install/repair grows existing images and APFS; shrinking is refused.
+# Preview capacity changes with --dry-run resize. Run as the signed-in user, never root.
 set -euo pipefail
 
 DEVBOX_VERSION="${DEVBOX_VERSION:-3.5.0}"
 DEVBOX_NAME="${DEVBOX_NAME:-devbox}"
-DEVBOX_SIZE_GB="${DEVBOX_SIZE_GB:-50}"
+DEVBOX_SIZE_GB="${DEVBOX_SIZE_GB:-100}"
 DEVBOX_VOLUME_LABEL="${DEVBOX_VOLUME_LABEL:-devbox}"
 DEVBOX_BACKUP_HOUR="${DEVBOX_BACKUP_HOUR:-2}"
 DEVBOX_BACKUP_MINUTE="${DEVBOX_BACKUP_MINUTE:-0}"
@@ -22,8 +24,14 @@ DEVBOX_VERIFY_POST_BACKUP_HASH="${DEVBOX_VERIFY_POST_BACKUP_HASH:-true}"
 DEVBOX_CONDITIONAL_INSTALL_BACKUP="${DEVBOX_CONDITIONAL_INSTALL_BACKUP:-true}"
 DEVBOX_BACKUP_AFTER_RESTORE="${DEVBOX_BACKUP_AFTER_RESTORE:-false}"
 
+DRY_RUN=false
+if [[ "${1:-}" == --dry-run ]]; then DRY_RUN=true; shift; fi
 MODE="${1:-install}"
 COMMAND_ARGUMENT="${2:-}"
+if [[ "$DRY_RUN" == true && "$MODE" != resize ]]; then
+  echo "ERROR: --dry-run is supported only with resize; no operation was performed." >&2
+  exit 2
+fi
 CURRENT_UID="$(/usr/bin/id -u)"
 CURRENT_USER="$(/usr/bin/id -un)"
 USER_HOME="$HOME"
@@ -34,7 +42,9 @@ for value in DEVBOX_SIZE_GB DEVBOX_BACKUP_HOUR DEVBOX_BACKUP_MINUTE DEVBOX_RETEN
   actual="${!value}"
   [[ "$actual" =~ ^[0-9]+$ ]] || { echo "ERROR: $value must be an integer." >&2; exit 1; }
 done
-(( DEVBOX_SIZE_GB >= 1 && DEVBOX_RETENTION >= 1 && DEVBOX_BACKUP_IF_OVERDUE_HOURS >= 1 )) || { echo "ERROR: Size, retention, and overdue hours must be at least 1." >&2; exit 1; }
+(( ${#DEVBOX_SIZE_GB} <= 5 && 10#$DEVBOX_SIZE_GB >= 1 && 10#$DEVBOX_SIZE_GB <= 65536 )) || { echo "ERROR: Devbox size must be between 1 and 65536 GB." >&2; exit 1; }
+DEVBOX_SIZE_GB=$((10#$DEVBOX_SIZE_GB))
+(( DEVBOX_RETENTION >= 1 && DEVBOX_BACKUP_IF_OVERDUE_HOURS >= 1 )) || { echo "ERROR: Retention and overdue hours must be at least 1." >&2; exit 1; }
 (( DEVBOX_BACKUP_HOUR <= 23 && DEVBOX_BACKUP_MINUTE <= 59 )) || { echo "ERROR: Invalid backup time." >&2; exit 1; }
 
 MACHINE_NAME="$(/usr/sbin/scutil --get ComputerName 2>/dev/null || /bin/hostname -s)"
@@ -58,7 +68,11 @@ GUI_DOMAIN="gui/$CURRENT_UID"
 RESTORE_OCCURRED=false
 IMAGE_CREATED_THIS_RUN=false
 
-log(){ /bin/mkdir -p "$USER_ROOT"; /usr/bin/printf '%s [%s] %s\n' "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)" "${2:-INFO}" "$1" | /usr/bin/tee -a "$LOG_PATH"; }
+log(){
+  if [[ "$DRY_RUN" == true ]]; then /usr/bin/printf 'DRY-RUN [%s] %s\n' "${2:-INFO}" "$1"; return 0; fi
+  if [[ "${MODE:-}" == status ]]; then /usr/bin/printf '%s [%s] %s\n' "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)" "${2:-INFO}" "$1"; return 0; fi
+  /bin/mkdir -p "$USER_ROOT"; /usr/bin/printf '%s [%s] %s\n' "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)" "${2:-INFO}" "$1" | /usr/bin/tee -a "$LOG_PATH"
+}
 is_true(){ [[ "${1:-false}" == true ]]; }
 is_mounted(){ /sbin/mount | /usr/bin/grep -Fq "on $MOUNT_POINT "; }
 
@@ -225,6 +239,167 @@ create_blank_image(){
   IMAGE_CREATED_THIS_RUN=true
 }
 
+devbox_image_size(){
+  local size
+  [[ -d "$IMAGE_PATH" && ! -L "$IMAGE_PATH" ]] || { log "Expected a local sparsebundle directory: $IMAGE_PATH" ERROR >&2; return 1; }
+  size="$(/usr/bin/plutil -extract size raw -o - "$IMAGE_PATH/Info.plist")" \
+    || { log "Cannot read virtual image capacity: $IMAGE_PATH" ERROR >&2; return 1; }
+  [[ "$size" =~ ^[0-9]+$ && "$size" -gt 0 ]] || { log "Invalid virtual image capacity: $IMAGE_PATH" ERROR >&2; return 1; }
+  /usr/bin/printf '%s\n' "$size"
+}
+
+devbox_image_attachment(){ #Output: whole-image device and its mount point, or empty when detached.
+  local info count index path canonical entities entity device="" mounted="" point
+  canonical="$(cd "$IMAGE_PATH" && pwd -P)" || return 1
+  info="$(/usr/bin/hdiutil info -plist)" || { log "Could not inspect attached disk images" ERROR >&2; return 1; }
+  count="$(/usr/bin/plutil -extract images raw -o - - <<< "$info")" || return 1
+  [[ "$count" =~ ^[0-9]+$ ]] || return 1
+  for ((index=0; index<count; index++)); do
+    path="$(/usr/bin/plutil -extract "images.$index.image-path" raw -o - - <<< "$info")" || return 1
+    [[ "$path" == "$IMAGE_PATH" || "$path" == "$canonical" ]] || continue
+    device="$(/usr/bin/plutil -extract "images.$index.system-entities.0.dev-entry" raw -o - - <<< "$info")" || return 1
+    [[ "$device" =~ ^/dev/disk[0-9]+$ ]] || { log "Image attachment is not a whole virtual disk" ERROR >&2; return 1; }
+    entities="$(/usr/bin/plutil -extract "images.$index.system-entities" raw -o - - <<< "$info")" || return 1
+    for ((entity=0; entity<entities; entity++)); do
+      point="$(/usr/bin/plutil -extract "images.$index.system-entities.$entity.mount-point" raw -o - - <<< "$info" 2>/dev/null)" || point=''
+      [[ -n "$point" ]] || continue
+      [[ -z "$mounted" && "$point" == "$MOUNT_POINT" ]] \
+        || { log "Devbox is attached at an unexpected or additional mount point; eject it before resizing" ERROR >&2; return 1; }
+      mounted="$point"
+    done
+    /usr/bin/printf '%s\t%s\n' "$device" "$mounted"
+    return 0
+  done
+}
+
+devbox_apfs_store(){ #Input: whole device proven to belong to IMAGE_PATH. Output: its last APFS partition.
+  local layout count index content store='' candidate
+  layout="$(/usr/sbin/diskutil list -plist "$1")" || return 1
+  content="$(/usr/bin/plutil -extract AllDisksAndPartitions.0.Content raw -o - - <<< "$layout")" || return 1
+  [[ "$content" == GUID_partition_scheme ]] || { log "Devbox requires its existing GPT layout; refusing to repartition" ERROR >&2; return 1; }
+  count="$(/usr/bin/plutil -extract AllDisksAndPartitions.0.Partitions raw -o - - <<< "$layout")" || return 1
+  for ((index=0; index<count; index++)); do
+    content="$(/usr/bin/plutil -extract "AllDisksAndPartitions.0.Partitions.$index.Content" raw -o - - <<< "$layout")" || return 1
+    [[ "$content" == Apple_APFS ]] || continue
+    [[ -z "$store" && "$index" -eq $((count-1)) ]] \
+      || { log "Expected one final APFS partition; refusing to change this image layout" ERROR >&2; return 1; }
+    candidate="$(/usr/bin/plutil -extract "AllDisksAndPartitions.0.Partitions.$index.DeviceIdentifier" raw -o - - <<< "$layout")" || return 1
+    [[ "$candidate" =~ ^disk[0-9]+s[0-9]+$ && "$candidate" == "${1#/dev/}"s* ]] || return 1
+    store="$candidate"
+  done
+  [[ -n "$store" ]] || { log "No APFS data partition found in the Devbox image" ERROR >&2; return 1; }
+  /usr/bin/printf '%s\n' "$store"
+}
+
+devbox_apfs_sizes(){ #Output: current and maximum size of a verified image partition.
+  local limits current maximum
+  limits="$(/usr/sbin/diskutil apfs resizeContainer "$1" limits -plist)" || return 1
+  current="$(/usr/bin/plutil -extract CurrentSize raw -o - - <<< "$limits")" || return 1
+  maximum="$(/usr/bin/plutil -extract MaximumSize raw -o - - <<< "$limits")" || return 1
+  [[ "$current" =~ ^[0-9]+$ && "$maximum" =~ ^[0-9]+$ && "$current" -gt 0 && "$maximum" -gt 0 ]] || return 1
+  /usr/bin/printf '%s %s\n' "$current" "$maximum"
+}
+
+resize_devbox(){ #Reconcile virtual image and usable APFS capacity without formatting or shrinking.
+  (
+    desired=$(((DEVBOX_SIZE_GB * 1000000000 + 4095) / 4096 * 4096))
+    current="$(devbox_image_size)" || exit 1
+    if (( desired < current )); then
+      log "Requested ${DEVBOX_SIZE_GB}GB is smaller than the existing $current-byte image. Automatic shrinking is refused; increase the setting or migrate data to a new image." ERROR
+      exit 1
+    fi
+    if [[ "$DRY_RUN" == true ]]; then
+      log "Current image: $current bytes; requested: $desired bytes" INFO
+      (( current == desired )) || log "Would temporarily detach this image and grow it to ${DEVBOX_SIZE_GB}GB" INFO
+      log "Would inspect its APFS partition, grow into available image space if needed, and restore the original mount state" INFO
+      exit 0
+    fi
+    acquire_backup_lock || exit 1
+    probe_device='' attachment_pending=false original_attached=false original_mounted=false restore_attachment=false
+    trap '
+      result=$?
+      trap - EXIT
+      if [[ "$attachment_pending" == true && -z "$probe_device" ]]; then
+        if attachment="$(devbox_image_attachment)"; then
+          read -r probe_device _ <<< "$attachment"
+        else
+          log "Could not identify the resize inspection attachment for $IMAGE_PATH; inspect and eject that image before retrying" ERROR
+          result=1
+          restore_attachment=false
+        fi
+      fi
+      if [[ -n "$probe_device" ]]; then
+        if ! /usr/sbin/diskutil eject "$probe_device" >/dev/null; then
+          log "Could not detach resize inspection device $probe_device; original mount state was not restored" ERROR
+          result=1
+          restore_attachment=false
+        fi
+      fi
+      if [[ "$restore_attachment" == true ]]; then
+        if [[ "$original_mounted" == true ]]; then
+          if ! mount_devbox; then log "Resize finished or failed, but Devbox could not be remounted; run mount after resolving the error" ERROR; result=1; fi
+        elif [[ "$original_attached" == true ]]; then
+          if ! /usr/sbin/diskutil image attach --noMount "$IMAGE_PATH" >/dev/null; then log "Could not restore the original image attachment" ERROR; result=1; fi
+        fi
+      fi
+      if ! release_backup_lock; then log "Could not release the Devbox capacity lock" ERROR; result=1; fi
+      exit "$result"
+    ' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM HUP
+    current="$(devbox_image_size)" || exit 1
+    (( desired >= current )) || { log "Image capacity changed while waiting; refusing to shrink it" ERROR; exit 1; }
+    attachment="$(devbox_image_attachment)" || { log "Could not establish the Devbox image attachment" ERROR; exit 1; }
+    device='' mounted=''
+    IFS=$'\t' read -r device mounted <<< "$attachment"
+    [[ -z "$device" ]] || original_attached=true
+    [[ -z "$mounted" ]] || original_mounted=true
+    attach_for_resize(){
+      local details identifier
+      attachment_pending=true
+      details="$(/usr/sbin/diskutil image attach --noMount --plist "$IMAGE_PATH")" || return 1
+      identifier="$(/usr/bin/plutil -extract system-entities.0.dev-entry raw -o - - <<< "$details")" || return 1
+      identifier="${identifier#/dev/}"
+      [[ "$identifier" =~ ^disk[0-9]+$ ]] || return 1
+      device="/dev/$identifier"
+      probe_device="$device"
+      attachment_pending=false
+    }
+    [[ -n "$device" ]] || attach_for_resize || { log "Could not attach the image for capacity inspection" ERROR; exit 1; }
+    store="$(devbox_apfs_store "$device")" || { log "Could not validate the APFS resize target" ERROR; exit 1; }
+    sizes="$(devbox_apfs_sizes "$store")" || { log "Could not read supported APFS sizes" ERROR; exit 1; }
+    read -r fs_current fs_maximum <<< "$sizes"
+    if (( current == desired && fs_current >= fs_maximum )); then
+      log "Devbox capacity is already ${DEVBOX_SIZE_GB}GB; APFS uses the available image space" SUCCESS
+      exit 0
+    fi
+    #Detach even for filesystem-only recovery: APFS resize may remount at a different path.
+    /usr/sbin/diskutil eject "$device" >/dev/null \
+      || { log "Devbox is busy. Close files, run the script from outside Devbox, and retry; no capacity change was made" ERROR; exit 1; }
+    probe_device=''
+    restore_attachment=true
+    if (( current < desired )); then
+      log "Growing image from $current to $desired bytes (${DEVBOX_SIZE_GB}GB)" INFO
+      /usr/sbin/diskutil image resize --size "$desired" "$IMAGE_PATH" \
+        || { log "Image growth failed; the existing image was not replaced. Resolve the error and rerun repair" ERROR; exit 1; }
+    fi
+    [[ "$(devbox_image_size)" == "$desired" ]] || { log "Image growth did not reach the requested capacity" ERROR; exit 1; }
+    attach_for_resize || { log "Could not inspect APFS after image growth; rerun repair" ERROR; exit 1; }
+    store="$(devbox_apfs_store "$device")" || { log "Could not validate APFS after image growth; rerun repair" ERROR; exit 1; }
+    sizes="$(devbox_apfs_sizes "$store")" || { log "Could not inspect APFS capacity after image growth; rerun repair" ERROR; exit 1; }
+    read -r fs_current fs_maximum <<< "$sizes"
+    if (( fs_current < fs_maximum )); then
+      log "Growing the existing APFS container to fill its image" INFO
+      /usr/sbin/diskutil apfs resizeContainer "$store" 0 \
+        || { log "The image is enlarged but APFS growth failed; data was not reformatted. Rerun repair" ERROR; exit 1; }
+      sizes="$(devbox_apfs_sizes "$store")" || { log "Could not verify APFS growth; rerun repair" ERROR; exit 1; }
+      read -r fs_current fs_maximum <<< "$sizes"
+      (( fs_current >= fs_maximum )) || { log "APFS did not grow to the available capacity; rerun repair" ERROR; exit 1; }
+    fi
+    log "Devbox image and APFS capacity reconciled to ${DEVBOX_SIZE_GB}GB" SUCCESS
+  )
+}
+
 create_or_repair_image(){
   local result=2
   /bin/mkdir -p "$USER_ROOT"
@@ -237,6 +412,7 @@ create_or_repair_image(){
     fi
     [[ -d "$IMAGE_PATH" ]] || create_blank_image
   fi
+  resize_devbox || return 1
   is_true "$DEVBOX_REPAIR_MOUNT" && mount_devbox
   create_mount_directories
 }
@@ -312,7 +488,13 @@ install_or_repair(){
 }
 
 status_devbox(){
+  local image_size
   echo "version=$([[ -f "$VERSION_FILE" ]] && /bin/cat "$VERSION_FILE" || echo missing)"; echo "image=$IMAGE_PATH"; echo "mount=$MOUNT_POINT"; echo "config=$CONFIG_FILE"; echo "backupRoot=$BACKUP_ROOT"; is_mounted && echo mounted=true || echo mounted=false; echo "latestBackup=$(find_latest_backup || echo none)"
+  echo "desiredSizeGB=$DEVBOX_SIZE_GB"
+  if [[ -d "$IMAGE_PATH" ]]; then
+    image_size="$(devbox_image_size)" || return 1
+    /usr/bin/printf 'imageSizeBytes=%s\n' "$image_size"
+  fi
 }
 
 uninstall_devbox(){
@@ -326,10 +508,11 @@ case "$MODE" in
   install|repair) install_or_repair ;;
   mount) mount_devbox; create_mount_directories ;;
   backup) backup_devbox ;;
-  restore) restore_devbox "$COMMAND_ARGUMENT"; mount_devbox; create_mount_directories ;;
+  resize) resize_devbox ;;
+  restore) restore_devbox "$COMMAND_ARGUMENT"; resize_devbox; mount_devbox; create_mount_directories ;;
   validate) [[ "${COMMAND_ARGUMENT:-live}" == live ]] && validate_backup_artifact "$IMAGE_PATH" || verify_backup "${COMMAND_ARGUMENT:-$(find_latest_backup)}" ;;
   status) status_devbox ;;
   uninstall) uninstall_devbox false ;;
   purge) uninstall_devbox true ;;
-  *) echo "Usage: $0 {install|repair|mount|backup|restore [path]|validate [live|path]|status|uninstall|purge}" >&2; exit 2 ;;
+  *) echo "Usage: $0 {install|repair|mount|backup|resize|restore [path]|validate [live|path]|status|uninstall|purge}; preview capacity with --dry-run resize" >&2; exit 2 ;;
 esac

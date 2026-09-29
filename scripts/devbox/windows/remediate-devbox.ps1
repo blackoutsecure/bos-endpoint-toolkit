@@ -9,7 +9,9 @@ Use this script as the remediation script for Microsoft Intune Remediations. It
 locates the most recently used non-special user profile, creates a dynamic ReFS
 Dev Drive VHDX in that user's LocalAppData, writes ProgramData state, installs a
 worker script, and registers SYSTEM scheduled tasks for startup mount and nightly
-backup.
+backup. Existing images and their ReFS data partitions grow to the configured
+capacity on each remediation run (100 GB by default). Shrinking and reformatting
+are never automatic.
 
 .NOTES
 Supported platform: Windows 11 endpoints where Format-Volume supports -DevDrive.
@@ -28,7 +30,7 @@ $ErrorActionPreference = 'Stop'
 # ==================== CONFIGURABLE VARIABLES ====================
 $DevboxVersion = '2.1.0'
 $DevboxName = 'devbox'
-$DevboxSizeGB = 50
+$DevboxSizeGB = 100
 $DevboxVolumeLabel = 'devbox'
 $DevboxPreferredDriveLetters = @('V', 'W', 'X', 'Y', 'Z')
 $DevboxBackupHour = 2
@@ -36,6 +38,10 @@ $DevboxBackupMinute = 0
 $DevboxRetention = 14
 $DevboxStateRoot = Join-Path $env:ProgramData $DevboxName
 # ================================================================
+
+if ($DevboxSizeGB -lt 50 -or $DevboxSizeGB -gt 65536 -or $DevboxSizeGB -ne [math]::Floor($DevboxSizeGB)) {
+    throw 'DevboxSizeGB must be an integer between 50 and 65536 (Dev Drive requires at least 50 GB).'
+}
 
 $MachineName = $env:COMPUTERNAME.ToLowerInvariant()
 $WorkerPath = Join-Path $DevboxStateRoot 'devbox-worker.ps1'
@@ -283,6 +289,141 @@ function New-DevboxVhdx {
     Mount-DiskImage -ImagePath $LiveVhdx | Out-Null
 }
 
+function Get-DevboxResizeLayout {
+    param([string]$LiveVhdx)
+
+    $Disks = @(Get-DiskImage -ImagePath $LiveVhdx | Get-Disk)
+    if ($Disks.Count -ne 1) {
+        throw 'Expected exactly one disk belonging to the Devbox VHDX.'
+    }
+    $Disk = $Disks[0]
+    if ($Disk.BusType -ne 'File Backed Virtual' -or $Disk.PartitionStyle -ne 'GPT' -or
+        $Disk.IsBoot -or $Disk.IsSystem -or $Disk.IsReadOnly) {
+        throw 'Refusing to resize an unexpected, system, or read-only disk.'
+    }
+    $Partitions = @(Get-Partition -DiskNumber $Disk.Number | Sort-Object Offset)
+    $DataPartitions = @($Partitions | Where-Object { $_.Type -eq 'Basic' })
+    if ($DataPartitions.Count -ne 1 -or $Partitions[-1].PartitionNumber -ne $DataPartitions[0].PartitionNumber) {
+        throw 'Expected one final data partition in the Devbox VHDX; no partition will be deleted.'
+    }
+    $Partition = $DataPartitions[0]
+    $Volumes = @($Partition | Get-Volume)
+    if ($Volumes.Count -ne 1 -or $Volumes[0].FileSystem -ne 'ReFS' -or
+        $Volumes[0].FileSystemLabel -ne $DevboxVolumeLabel) {
+        throw 'Expected the configured ReFS Devbox volume; refusing to reformat or resize another volume.'
+    }
+    $Supported = Get-PartitionSupportedSize -DiskNumber $Disk.Number -PartitionNumber $Partition.PartitionNumber
+    if ([uint64]$Supported.SizeMax -eq 0) {
+        throw 'Windows did not report a valid maximum size for the Devbox partition.'
+    }
+    [pscustomobject]@{ Disk = $Disk; Partition = $Partition; MaximumSize = [uint64]$Supported.SizeMax }
+}
+
+function Resize-DevboxVhdx {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param([string]$LiveVhdx)
+
+    if ($LiveVhdx -match '["\r\n]' -or [IO.Path]::GetExtension($LiveVhdx) -ne '.vhdx') {
+        throw 'Expected a VHDX path without quotes or newlines.'
+    }
+    foreach ($Command in 'diskpart.exe', 'Get-DiskImage', 'Mount-DiskImage', 'Dismount-DiskImage',
+        'Get-Disk', 'Get-Partition', 'Get-Volume', 'Get-PartitionSupportedSize', 'Resize-Partition') {
+        if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
+            throw "Required resize command unavailable: $Command"
+        }
+    }
+    $TargetSize = [uint64]($DevboxSizeGB * 1GB)
+    $BackupMutex = [Threading.Mutex]::new($false, 'Global\DEVBOX_BACKUP')
+    $BackupHeld = $false
+    $OriginalAttached = $false
+    $AttachmentTouched = $false
+    $DiskpartPath = $null
+    try {
+        $BackupHeld = $BackupMutex.WaitOne(0)
+        if (-not $BackupHeld) {
+            throw 'A Devbox backup is running. Capacity changes must wait until it finishes.'
+        }
+        $Image = Get-DiskImage -ImagePath $LiveVhdx
+        $OriginalAttached = [bool]$Image.Attached
+        if ([uint64]$Image.Size -eq 0) {
+            throw 'Could not determine the virtual size of the Devbox VHDX.'
+        }
+        if ([uint64]$Image.Size -gt $TargetSize) {
+            throw "The existing VHDX is larger than ${DevboxSizeGB}GB. Automatic shrinking is refused; increase the setting or migrate to a new image."
+        }
+        if (-not $Image.Attached) {
+            if (-not $PSCmdlet.ShouldProcess($LiveVhdx, "Mount and reconcile existing ReFS capacity to ${DevboxSizeGB}GB")) {
+                return
+            }
+            $AttachmentTouched = $true
+            Mount-DiskImage -ImagePath $LiveVhdx | Out-Null
+        }
+        $Layout = Get-DevboxResizeLayout -LiveVhdx $LiveVhdx
+        if ([uint64]$Image.Size -lt $TargetSize) {
+            if (-not $PSCmdlet.ShouldProcess($LiveVhdx, "Detach, expand VHDX to ${DevboxSizeGB}GB, and grow its existing ReFS partition")) {
+                return
+            }
+            $AttachmentTouched = $true
+            Dismount-DiskImage -ImagePath $LiveVhdx
+            if ((Get-DiskImage -ImagePath $LiveVhdx).Attached) {
+                throw 'The VHDX could not be detached. Close files on Devbox and retry.'
+            }
+            $DiskpartPath = Join-Path $env:TEMP ("devbox-resize-{0}.txt" -f [guid]::NewGuid().ToString('N'))
+            @(
+                "select vdisk file=`"$LiveVhdx`"",
+                "expand vdisk maximum=$($DevboxSizeGB * 1024)",
+                'exit'
+            ) | Set-Content -LiteralPath $DiskpartPath -Encoding Unicode
+            $Output = & diskpart.exe /s $DiskpartPath 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                throw "VHDX expansion failed: $($Output -join ' ')"
+            }
+            $Image = Get-DiskImage -ImagePath $LiveVhdx
+            if ([uint64]$Image.Size -ne $TargetSize) {
+                throw 'VHDX expansion did not reach the requested virtual capacity.'
+            }
+            Mount-DiskImage -ImagePath $LiveVhdx | Out-Null
+            #Attachment can change the disk number; resolve the layout from the image path again.
+            $Layout = Get-DevboxResizeLayout -LiveVhdx $LiveVhdx
+        }
+        if ([uint64]$Layout.Partition.Size -lt $Layout.MaximumSize) {
+            if (-not $PSCmdlet.ShouldProcess($LiveVhdx, "Extend the existing ReFS partition to $($Layout.MaximumSize) bytes")) {
+                return
+            }
+            Resize-Partition -DiskNumber $Layout.Disk.Number -PartitionNumber $Layout.Partition.PartitionNumber -Size $Layout.MaximumSize
+            $Updated = Get-DevboxResizeLayout -LiveVhdx $LiveVhdx
+            if ([uint64]$Updated.Partition.Size -lt $Updated.MaximumSize) {
+                throw 'The image is enlarged but the ReFS partition is still too small. Rerun remediation; do not reformat it.'
+            }
+        }
+        Write-DevboxLog "Devbox capacity is ${DevboxSizeGB}GB and its ReFS partition uses the available image space." 'SUCCESS'
+    } catch {
+        $ResizeError = $_
+        if ($AttachmentTouched) {
+            try {
+                $AttachedNow = [bool](Get-DiskImage -ImagePath $LiveVhdx).Attached
+                if ($OriginalAttached -and -not $AttachedNow) {
+                    Mount-DiskImage -ImagePath $LiveVhdx | Out-Null
+                } elseif (-not $OriginalAttached -and $AttachedNow) {
+                    Dismount-DiskImage -ImagePath $LiveVhdx
+                }
+            } catch {
+                throw "Capacity reconciliation failed: $($ResizeError.Exception.Message) Restoring the original attachment also failed: $($_.Exception.Message)"
+            }
+        }
+        throw $ResizeError
+    } finally {
+        try {
+            if ($DiskpartPath -and (Test-Path -LiteralPath $DiskpartPath)) {
+                Remove-Item -LiteralPath $DiskpartPath -Force
+            }
+        } finally {
+            if ($BackupHeld) { $BackupMutex.ReleaseMutex() }
+            $BackupMutex.Dispose()
+        }
+    }
+}
+
 $Mutex = [Threading.Mutex]::new($false, 'Global\DEVBOX_REMEDIATION')
 $Held = $false
 
@@ -310,10 +451,7 @@ try {
     if (-not (Test-Path -LiteralPath $LiveVhdx)) {
         New-DevboxVhdx -LiveVhdx $LiveVhdx -StageVhdx $StageVhdx
     } else {
-        $Image = Get-DiskImage -ImagePath $LiveVhdx
-        if (-not $Image.Attached -and $PSCmdlet.ShouldProcess($LiveVhdx, 'Mount existing devbox VHDX')) {
-            Mount-DiskImage -ImagePath $LiveVhdx | Out-Null
-        }
+        Resize-DevboxVhdx -LiveVhdx $LiveVhdx
     }
 
     if ($PSCmdlet.ShouldProcess($DevboxStateRoot, 'Write devbox state, worker, and version files')) {
