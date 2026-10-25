@@ -75,6 +75,16 @@ if HOME="$LEGACY_HOME" bash "$SCRIPT" config > "$WORK/invalid-legacy-mount.log" 
   echo 'ERROR: A legacy mount point ending in a line feed was accepted.' >&2; exit 1
 fi
 /usr/bin/plutil -replace mountPoint -string '/Volumes/Legacy Workspace' "$LEGACY_STATE"
+/usr/bin/plutil -remove mountPoint "$LEGACY_STATE"
+HOME="$LEGACY_HOME" bash "$SCRIPT" config > "$WORK/legacy-without-mount.json"
+[[ "$(/usr/bin/plutil -extract macos.volumeLabel raw -o - "$WORK/legacy-without-mount.json")" == \
+   "$(/usr/bin/plutil -extract macos.volumeLabel raw -o - "$WORK/default.json")" ]]
+/usr/bin/plutil -insert mountPoint -integer 42 "$LEGACY_STATE"
+if HOME="$LEGACY_HOME" bash "$SCRIPT" config > "$WORK/invalid-legacy-type.log" 2>&1; then
+  echo 'ERROR: A non-string legacy mount point was treated as absent.' >&2; exit 1
+fi
+grep -q 'Legacy mountPoint must be a string' "$WORK/invalid-legacy-type.log"
+/usr/bin/plutil -replace mountPoint -string '/Volumes/Legacy Workspace' "$LEGACY_STATE"
 /usr/bin/plutil -replace schemaVersion -integer 99 "$LEGACY_STATE"
 if HOME="$LEGACY_HOME" bash "$SCRIPT" config > "$WORK/invalid-legacy.log" 2>&1; then
   echo 'ERROR: Unsupported legacy state schema was accepted.' >&2; exit 1
