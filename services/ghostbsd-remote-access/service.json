@@ -1,0 +1,7 @@
+{
+  "name": "ghostbsd-remote-access",
+  "versions": {
+    "ghostbsd": "1.0.0",
+    "windows": "1.0.0"
+  }
+}

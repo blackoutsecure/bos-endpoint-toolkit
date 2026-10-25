@@ -2,79 +2,135 @@
 
 [![Made by BlackoutSecure](https://img.shields.io/badge/made%20by-BlackoutSecure-1f1f1f)](https://github.com/blackoutsecure)
 
-Cross-platform scripts and operational guidance for managing Windows, Linux,
-and macOS endpoints. The toolkit is suitable for Intune-adjacent administration
-and general endpoint maintenance; it does not require a specific management
-platform.
+Service-first endpoint automation with shared configuration contracts and native
+platform backends. Deployment scripts do not require Node.js, Rust, a resident
+toolkit agent, or a particular management platform.
+The optional compiled Rust CLI shares configuration and read-only planning;
+it does not replace native privilege boundaries or require a Rust runtime.
 
-## Layout
+## Services
+
+| Service | Purpose | Implemented platforms |
+| --- | --- | --- |
+| [Devbox](services/devbox/README.md) | Disk-image-backed development workspaces, mounting, and backups | [Windows](services/devbox/windows/README.md), [macOS](services/devbox/macos/README.md) |
+| [GhostBSD Remote Access](services/ghostbsd-remote-access/README.md) | MATE/XRDP guest setup, SSH onboarding, VM checks, and tunneled desktop access | [GhostBSD guest](services/ghostbsd-remote-access/ghostbsd/README.md), [Windows operator](services/ghostbsd-remote-access/windows/README.md) |
+
+Linux is a future backend, not an implemented or certified Devbox platform.
+Portable policy tests run on Ubuntu; that does not imply Linux storage support.
+Devbox is not the Microsoft Dev Box cloud service or a compliance scanner.
+
+## Organization
 
 ```text
-scripts/
+framework/
+  README.md                  Shared behavior and deployment contracts
+  schemas/                   Reusable configuration definitions
+  crates/endpoint-core/      Rust service/configuration contracts and pure plans
+  crates/endpoint-cli/       Read-only Rust command-line frontend
+services/
   devbox/
-    README.md       Capability overview and deployment entry points
-    windows/        Related PowerShell scripts and Windows guidance
-    macos/          Bash management script and macOS guidance
-docs/               Documentation index and cross-capability runbooks
+    README.md                Service purpose and cross-platform contract
+    service.json             Native implementation versions
+    config/                  Defaults and desired-configuration schema
+    windows/                 Native PowerShell sources and tests
+    macos/                   Native Bash sources and tests
+  ghostbsd-remote-access/
+    README.md                Remote-access contract and archive migration
+    service.json             Native implementation versions
+    config/                  Build-time defaults and schema
+    ghostbsd/                Guest Bash backend and portable contracts
+    windows/                 PowerShell operator and safe mocks
+tools/                       Repository-only build, packaging, and validation
+output/                      Generated, ignored deployment artifacts
+Cargo.toml Cargo.lock        Shared Rust workspace and locked dependencies
+rust-toolchain.toml          Pinned build-machine Rust SDK/components
+target/                      Ignored Cargo build artifacts
 ```
 
-Organize by **capability/service, then operating system**:
-`scripts/<capability>/<os>/`. Keep scripts that are deployed together in the same
-package, with documentation and any required supporting files alongside them.
-An independent task can have its own subfolder when it needs separate
-documentation, templates, or dependencies; a one-file folder for every related
-script is not required.
+A service is an operational capability, not necessarily a background daemon.
+Code, tests, and platform usage guidance live with their service. There is no
+separate documentation index duplicating these READMEs. Add a platform or shared
+runtime library only when it has a real implementation and tests.
 
-Keep each script focused on one operational task. Scripts should state their
-supported platforms, required privileges, inputs, and whether they are safe to
-run repeatedly.
+## Build deployable scripts
 
-## Capabilities
+On a development/build machine with Node.js 22.16 or later:
 
-| Capability | Purpose | Implemented platforms |
-| --- | --- | --- |
-| [Devbox](scripts/devbox/README.md) | Disk-image-backed development workspaces, mounting, and backups | [Windows](scripts/devbox/windows/README.md), [macOS](scripts/devbox/macos/README.md) |
+```text
+npm ci --ignore-scripts
+npm run build
+npm test
+```
 
-Linux support is a repository goal, but no Linux scripts are implemented yet.
-See the [documentation index](docs/README.md) for platform details and operational
-guidance.
+The build validates [shared defaults](services/devbox/config/defaults.json)
+against the [service schema](services/devbox/config/schema.json), follows local
+schema references, and embeds native validators and required resources. Windows
+remediation embeds the one authored worker automatically. No package installation
+occurs on endpoints.
 
-Devbox defaults to a **100 GB** virtual disk on both implemented platforms.
-Increasing its configured size grows the existing image and filesystem during
-install/repair; it does not recreate the workspace. Automatic shrinking is
-refused. See the platform guides for size units, previews, and backup precautions.
+The default build also generates [GhostBSD Remote Access](services/ghostbsd-remote-access/README.md)
+under `output/ghostbsd-remote-access/`. Its Windows operator embeds the guest
+backend; no original setup ZIP or adjacent helper scripts are required.
 
-## Adding a script
+Deploy the generated scripts under `output/devbox/windows/` or
+`output/devbox/macos/`, not the authoring templates under `services/`.
+Do not deploy a checkout or depend on adjacent repository files.
 
-1. Choose a capability and put the script in `scripts/<capability>/<os>/`.
-2. Use a descriptive, kebab-case name such as `collect-device-inventory.ps1`.
-3. Include `-WhatIf` support for PowerShell scripts that change a device.
-4. Include `--dry-run` support for shell scripts that change a device.
-5. Keep the capability overview in its README and platform prerequisites,
-   commands, expected output, and rollback in the OS README and script headers.
-6. Place necessary task-specific resources beside their owner and document how
-   they are resolved. Document external dependencies rather than committing
-   installed packages or downloaded tools.
-7. Add shared code only for demonstrated reuse, with an explicit calling
-   contract. Do not create placeholder OS, shared, or dependency folders.
-8. Link the capability from this page and the documentation index. See
-   [Contributing](CONTRIBUTING.md) for validation requirements.
+An optional partial deployment profile can set defaults for a new installation:
 
-macOS Devbox supports `--dry-run resize` for capacity previews, not a full
-install/repair preview; see its [safe inspection guidance](scripts/devbox/macos/README.md#prerequisites-and-safe-inspection).
+```text
+npm run build -- --config path-to-profile.json
+```
 
-## Existing deployment references
+Existing persisted desired configuration takes precedence over packaged defaults.
+To reconfigure an installed endpoint, explicitly supply a profile using the
+platform entry point; rebuilding alone is not a policy override.
 
-Devbox sources have moved from the former OS-first directories into
-`scripts/devbox/<os>/`. Update any external deployment source paths or raw-file
-URLs accordingly. Installed runtime/data locations are unchanged; see the
-[migration note](scripts/devbox/README.md#repository-path-migration).
+## Documentation and deployment
 
-## Conventions
+- [Devbox configuration and migration](services/devbox/README.md)
+- [Windows detection, remediation, and scheduled worker](services/devbox/windows/README.md)
+- [macOS CLI and managed PKG deployment](services/devbox/macos/README.md)
+- [Framework standards and extension boundaries](framework/README.md)
+- [GhostBSD guest setup and Windows remote-access operator](services/ghostbsd-remote-access/README.md)
+- [Contributing and validation](CONTRIBUTING.md)
 
-- Do not embed credentials, tenant IDs, device IDs, or internal endpoints.
-- Validate inputs before making changes.
-- Prefer idempotent operations and clear, actionable error messages.
-- Avoid installing dependencies without an explicit option or documented
-  prerequisite.
-- Test destructive operations in a non-production endpoint first.
+For macOS fleets, the build stages a PKG payload with a user-session initialization
+LaunchAgent. Packaging supports Developer ID Installer signing, notarization, and
+stapling. A `.app` is not required for automation; add a GUI only if there is a
+user-facing need.
+
+## Rust CLI
+
+The [Rust framework](framework/README.md#rust-framework) resolves the same
+authored defaults/schemas for both services and produces read-only native
+adapter plans. It does not install packages, elevate, run SSH, or execute the
+listed native operations. There is no Rust `apply` command.
+
+With the pinned Rust SDK and a complete native linker toolchain:
+
+```text
+cargo run --locked -- services
+cargo run --locked -- configuration --service ghostbsd-remote-access
+cargo run --locked -- plan --service ghostbsd-remote-access --platform windows --operation apply --user desktop
+npm run check:rust
+npm run test:rust
+npm run build:rust
+```
+
+`desktop` is an example explicit existing account, not a default or an account
+created by the CLI. `--config` selects an explicit partial JSON profile.
+There is no implicit lookup of installed or private configuration.
+Release binaries are under `target/release/`; they embed public schemas,
+defaults and service metadata and run without Cargo, Node.js or a checkout.
+Native script generation remains independently available through `npm run build`.
+
+## Safety
+
+- Inspect configuration and status before applying changes.
+- Preserve native privilege boundaries: Windows is elevated; macOS refuses root.
+- Keep disk formats, installed paths, and backups stable across source moves.
+- Validate on disposable native endpoints before production rollout.
+- Do not embed credentials, inventories, tenant IDs, or internal endpoints.
+- Never interpret a syntax check, mock suite, unsigned package, or skipped native
+  test as evidence of a production-ready deployment.
