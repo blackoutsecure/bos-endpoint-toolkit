@@ -12,6 +12,37 @@ const dispatch = source.slice(start);
 const bash = process.env.BOS_BASH ?? (process.platform === 'win32'
   ? join(process.env.ProgramFiles, 'Git', 'bin', 'bash.exe') : 'bash');
 
+const configurationSource = (await readFile(new URL('macos/configuration.sh', serviceRoot), 'utf8')).replaceAll('\r\n', '\n');
+const captureStart = configurationSource.indexOf('capture_config_value(){\n');
+const captureEnd = configurationSource.indexOf('\nvalidate_config_json(){', captureStart);
+assert.ok(captureStart >= 0 && captureEnd > captureStart);
+const capture = configurationSource.slice(captureStart, captureEnd);
+
+test('native configuration capture preserves trailing line feeds and command failures', () => {
+  const result = spawnSync(bash, ['--noprofile', '--norc', '-s'], {
+    input: `set -euo pipefail
+${capture}
+for value in '' plain $'line\\n' $'line\\n\\n' $'line\\r\\n'; do
+  capture_config_value printf '%s' "$value"
+  [[ "$CONFIG_VALUE" == "$value" ]]
+done
+capture_config_value printf '%s\\n' $'line\\n'
+[[ "\${CONFIG_VALUE%$'\\n'}" == $'line\\n' ]]
+native_failure(){ printf 'partial\\n'; return 7; }
+if capture_config_value native_failure; then
+  printf 'ERROR: Failed native read was reported as successful.\\n' >&2
+  exit 1
+fi
+printf 'PASS exact native value capture\\n'
+`,
+    encoding: 'utf8',
+    timeout: 120000
+  });
+  if (result.error) throw result.error;
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'PASS exact native value capture\n');
+});
+
 function validate(argument) {
   const result = spawnSync(bash, ['--noprofile', '--norc', '-s'], {
     input: `set -euo pipefail

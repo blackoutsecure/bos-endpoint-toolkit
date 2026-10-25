@@ -65,6 +65,16 @@ HOME="$LEGACY_HOME" bash "$SCRIPT" config > "$WORK/legacy.json"
 [[ "$(/usr/bin/plutil -extract macos.hideVolume raw -o - "$WORK/legacy.json")" == true ]]
 [[ "$(/usr/bin/plutil -extract macos.volumeLabel raw -o - "$WORK/legacy.json")" == 'Legacy Workspace' ]]
 [[ "$(/usr/bin/plutil -extract windows.sizeGiB raw -o - "$WORK/legacy.json")" == 100 ]]
+/usr/bin/plutil -insert name -string $'devbox\n' "$LEGACY_STATE"
+if HOME="$LEGACY_HOME" bash "$SCRIPT" config > "$WORK/invalid-legacy-name.log" 2>&1; then
+  echo 'ERROR: A legacy name ending in a line feed was accepted.' >&2; exit 1
+fi
+/usr/bin/plutil -remove name "$LEGACY_STATE"
+/usr/bin/plutil -replace mountPoint -string $'/Volumes/Legacy Workspace\n' "$LEGACY_STATE"
+if HOME="$LEGACY_HOME" bash "$SCRIPT" config > "$WORK/invalid-legacy-mount.log" 2>&1; then
+  echo 'ERROR: A legacy mount point ending in a line feed was accepted.' >&2; exit 1
+fi
+/usr/bin/plutil -replace mountPoint -string '/Volumes/Legacy Workspace' "$LEGACY_STATE"
 /usr/bin/plutil -replace schemaVersion -integer 99 "$LEGACY_STATE"
 if HOME="$LEGACY_HOME" bash "$SCRIPT" config > "$WORK/invalid-legacy.log" 2>&1; then
   echo 'ERROR: Unsupported legacy state schema was accepted.' >&2; exit 1
@@ -77,6 +87,10 @@ for invalid in \
   '{"schemaVersion":1,"macos":null}' '{"schemaVersion":1,"name":"../escape"}' \
   '{"schemaVersion":1,"retention":0}' '{"schemaVersion":1,"retention":"14"}' \
   '{"schemaVersion":1,"macos":{"hideVolume":"true"}}' \
+  '{"schemaVersion":1,"name":"devbox\n"}' \
+  '{"schemaVersion":1,"macos":{"volumeLabel":"Workspace\n"}}' \
+  '{"schemaVersion":1,"workspaceDirectories":["repos\n"]}' \
+  '{"schemaVersion":1,"windows":{"preferredDriveLetters":["V\n"]}}' \
   '{"schemaVersion":1,"workspaceDirectories":["repos","repos"]}'; do
   printf '%s\n' "$invalid" > "$WORK/invalid.json"
   if bash "$SCRIPT" --config "$WORK/invalid.json" config > "$WORK/invalid-output.log" 2>&1; then
@@ -86,6 +100,11 @@ done
 if DEVBOX_HIDE_VOLUME=invalid bash "$SCRIPT" config > "$WORK/invalid-env.log" 2>&1; then
   echo 'ERROR: Invalid boolean environment value accepted.' >&2; exit 1
 fi
+for setting in 'DEVBOX_NAME=devbox' 'DEVBOX_VOLUME_LABEL=Workspace Tools' 'DEVBOX_SIZE_GB=8' 'DEVBOX_HIDE_VOLUME=true'; do
+  if /usr/bin/env "$setting"$'\n' bash "$SCRIPT" config > "$WORK/invalid-newline-env.log" 2>&1; then
+    echo "ERROR: Environment value ending in a line feed was accepted: ${setting%%=*}" >&2; exit 1
+  fi
+done
 if bash "$SCRIPT" --config "$WORK/missing.json" config > "$WORK/missing.log" 2>&1; then
   echo 'ERROR: Missing explicit configuration silently fell back.' >&2; exit 1
 fi

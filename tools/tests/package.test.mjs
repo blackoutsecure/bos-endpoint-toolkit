@@ -27,7 +27,8 @@ for (const [command, mock] of Object.entries({
 
 const mocks = `
 set -euo pipefail
-export TMPDIR="$PWD"
+export TMPDIR="$PWD/unrelated-tmp"
+mkdir -p "$TMPDIR"
 trace_step(){
   printf '%s\\n' "$1" >> package-trace.txt
   [[ "\${FAIL_STEP:-}" != "$1" ]]
@@ -39,6 +40,10 @@ mock_pkgbuild(){
   trace_step pkgbuild || return 21
   local output
   for output in "$@"; do :; done
+  [[ "$(dirname "$(dirname "$output")")" == "$ROOT/output/devbox/macos" ]] || {
+    printf 'ERROR: Package staging is not beside its publication target.\\n' >&2
+    return 22
+  }
   printf 'fixture package\\n' > "$output"
 }
 mock_xcrun(){ trace_step "$1:$2"; }
@@ -68,6 +73,14 @@ async function fixture(action) {
 }
 
 const releaseArgs = ['--sign', 'Developer ID Installer: Fixture', '--notary-profile', 'fixture-profile'];
+
+test('package staging stays beside the output even when TMPDIR points elsewhere', async () => {
+  await fixture(async (_directory, run) => {
+    const result = run(releaseArgs);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Signed, notarized, stapled package:/);
+  });
+});
 
 test('release packaging publishes only after notarization, stapling, and verification succeed', async () => {
   await fixture(async (directory, run) => {

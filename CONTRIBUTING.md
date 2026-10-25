@@ -34,7 +34,8 @@ Windows Bash, not WSL; set `BOS_BASH` if Git is installed elsewhere.
 Windows CI installs the official ShellCheck 0.10.0 ZIP after verifying its pinned
 SHA-256, without an elevated package-manager installation.
 Package unit tests mock Apple command boundaries and exercise release-gate
-failure propagation without invoking Apple tools or installing a package.
+failure propagation and same-directory publication staging without invoking
+Apple tools or installing a package.
 They do not prove native signing, notarization, or PKG behavior.
 Portable shell tests also inject restore-publication failures with automatic
 error exit disabled, matching automatic recovery. Failed publication must not
@@ -112,8 +113,9 @@ bash services/devbox/macos/tests/configuration.sh
 bash tools/package-macos.sh --unsigned
 ```
 
-The configuration suite covers typed scalar/array overrides and legacy-state
-migration without calling launchctl. Unsigned PKGs are validation
+The configuration suite covers typed scalar/array overrides, rejects trailing
+line feeds in profiles, legacy settings and environment values, and checks
+legacy-state migration without calling launchctl. Unsigned PKGs are validation
 artifacts only. Never install one on a configured workstation as a shortcut.
 
 When changing workflows, also run:

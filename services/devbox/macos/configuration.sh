@@ -7,6 +7,13 @@ export DEVBOX_RELEASE_VERSION=''
 
 config_error(){ /usr/bin/printf 'ERROR: Configuration: %s\n' "$1" >&2; return 1; }
 
+# The sentinel keeps command substitution from trimming value-owned line feeds.
+capture_config_value(){
+  local captured
+  captured="$("$@" && /usr/bin/printf '.')" || return 1
+  CONFIG_VALUE="${captured%.}"
+}
+
 validate_config_json(){
   local document="$1" remaining="$1" key type minimum maximum pattern min_items env_key value count index entry seen object
   # Scalar plist values cannot be serialized as top-level JSON.
@@ -15,15 +22,17 @@ validate_config_json(){
   while IFS='|' read -r key type minimum maximum pattern min_items env_key; do
     if ! value="$(/usr/bin/plutil -extract "$key" xml1 -o - - <<< "$document" 2>/dev/null)"; then continue; fi
     if [[ "$type" == integer ]]; then
-      if ! value="$(/usr/bin/plutil -extract "$key" raw -expect integer -o - - <<< "$document" 2>/dev/null)"; then
-        value="$(/usr/bin/plutil -extract "$key" raw -expect float -o - - <<< "$document")" \
+      if ! capture_config_value /usr/bin/plutil -extract "$key" raw -expect integer -n -o - - <<< "$document" 2>/dev/null; then
+        capture_config_value /usr/bin/plutil -extract "$key" raw -expect float -n -o - - <<< "$document" \
           || { config_error "Invalid type for $key (expected an integer number)"; return 1; }
       fi
+      value="$CONFIG_VALUE"
       [[ "$value" =~ ^[0-9]+([.]0+)?$ ]] || { config_error "$key must be a whole number"; return 1; }
       value="${value%%.*}"
     else
-      value="$(/usr/bin/plutil -extract "$key" raw -expect "$type" -o - - <<< "$document")" \
+      capture_config_value /usr/bin/plutil -extract "$key" raw -expect "$type" -n -o - - <<< "$document" \
         || { config_error "Invalid type for $key (expected $type)"; return 1; }
+      value="$CONFIG_VALUE"
     fi
     case "$type" in
       integer)
@@ -39,7 +48,8 @@ validate_config_json(){
         count="$value"; seen=$'\n'
         (( count >= min_items )) || { config_error "Empty array: $key"; return 1; }
         for (( index=0; index<count; index++ )); do
-          entry="$(/usr/bin/plutil -extract "$key.$index" raw -expect string -o - - <<< "$document")" || return 1
+          capture_config_value /usr/bin/plutil -extract "$key.$index" raw -expect string -n -o - - <<< "$document" || return 1
+          entry="$CONFIG_VALUE"
           [[ "$entry" =~ $pattern && "$seen" != *$'\n'"$entry"$'\n'* ]] \
             || { config_error "Invalid or duplicate entry in $key"; return 1; }
           seen+="$entry"$'\n'
@@ -67,7 +77,8 @@ resolve_devbox_config(){
   EFFECTIVE_CONFIG="$DEVBOX_DEFAULTS_JSON"
   export CONFIGURATION_SOURCE='packaged defaults'
   if [[ -z "$path" ]]; then
-    namespace="$(/usr/bin/plutil -extract name raw -expect string -o - - <<< "$DEVBOX_DEFAULTS_JSON")" || return 1
+    capture_config_value /usr/bin/plutil -extract name raw -expect string -n -o - - <<< "$DEVBOX_DEFAULTS_JSON" || return 1
+    namespace="$CONFIG_VALUE"
     if [[ -f "$SCRIPT_DIRECTORY/desired-config.json" ]]; then path="$SCRIPT_DIRECTORY/desired-config.json"
     elif [[ -f "$HOME/Library/Application Support/$namespace/desired-config.json" ]]; then
       path="$HOME/Library/Application Support/$namespace/desired-config.json"
@@ -84,7 +95,8 @@ resolve_devbox_config(){
       legacy="$HOME/Library/Application Support/$namespace/config.plist"
     fi
     if [[ -n "$legacy" ]]; then
-      value="$(/usr/bin/plutil -extract schemaVersion raw -expect integer -o - "$legacy")" || return 1
+      capture_config_value /usr/bin/plutil -extract schemaVersion raw -expect integer -n -o - "$legacy" || return 1
+      value="$CONFIG_VALUE"
       [[ "$value" == 3 ]] || { config_error "Unsupported legacy state schema: $value"; return 1; }
       for mapping in name:name retention:retention backupHour:backupHour backupMinute:backupMinute \
         hideVolume:macos.hideVolume autoRestore:macos.autoRestore \
@@ -94,7 +106,8 @@ resolve_devbox_config(){
           EFFECTIVE_CONFIG="$(/usr/bin/plutil -replace "$key" -xml "$value" -o - - <<< "$EFFECTIVE_CONFIG")" || return 1
         fi
       done
-      if value="$(/usr/bin/plutil -extract mountPoint raw -expect string -o - "$legacy" 2>/dev/null)"; then
+      if capture_config_value /usr/bin/plutil -extract mountPoint raw -expect string -n -o - "$legacy" 2>/dev/null; then
+        value="$CONFIG_VALUE"
         [[ "$value" == /Volumes/* ]] || { config_error 'Unexpected legacy mount point'; return 1; }
         EFFECTIVE_CONFIG="$(/usr/bin/plutil -replace macos.volumeLabel -string "${value#/Volumes/}" -o - - <<< "$EFFECTIVE_CONFIG")" || return 1
       fi
@@ -106,7 +119,8 @@ resolve_devbox_config(){
     if [[ -n "$override" ]] && value="$(/usr/bin/plutil -extract "$key" xml1 -o - - <<< "$override" 2>/dev/null)"; then
       EFFECTIVE_CONFIG="$(/usr/bin/plutil -replace "$key" -xml "$value" -o - - <<< "$EFFECTIVE_CONFIG")" || return 1
     fi
-    if [[ -n "$env_key" ]] && value="$(/usr/bin/printenv "$env_key")"; then
+    if [[ -n "$env_key" ]] && capture_config_value /usr/bin/printenv "$env_key"; then
+      value="${CONFIG_VALUE%$'\n'}"
       case "$type" in
         integer)
           [[ "$value" =~ ^[0-9]+$ && ${#value} -le 10 ]] || { config_error "$env_key must be an integer"; return 1; }
@@ -122,18 +136,20 @@ resolve_devbox_config(){
   validate_config_json "$EFFECTIVE_CONFIG" || return 1
   while IFS='|' read -r key type minimum maximum pattern min_items env_key; do
     if [[ "$type" == integer ]]; then
-      value="$(/usr/bin/plutil -extract "$key" raw -o - - <<< "$EFFECTIVE_CONFIG")" || return 1
+      capture_config_value /usr/bin/plutil -extract "$key" raw -n -o - - <<< "$EFFECTIVE_CONFIG" || return 1
+      value="$CONFIG_VALUE"
       EFFECTIVE_CONFIG="$(/usr/bin/plutil -replace "$key" -integer "${value%%.*}" -o - - <<< "$EFFECTIVE_CONFIG")" || return 1
     fi
     if [[ -n "$env_key" ]]; then
-      value="$(/usr/bin/plutil -extract "$key" raw -o - - <<< "$EFFECTIVE_CONFIG")" || return 1
-      printf -v "$env_key" '%s' "$value"
+      capture_config_value /usr/bin/plutil -extract "$key" raw -n -o - - <<< "$EFFECTIVE_CONFIG" || return 1
+      printf -v "$env_key" '%s' "$CONFIG_VALUE"
     fi
   done <<< "$DEVBOX_CONFIGURATION_FIELDS"
   WORKSPACE_DIRECTORIES=()
-  count="$(/usr/bin/plutil -extract workspaceDirectories raw -expect array -o - - <<< "$EFFECTIVE_CONFIG")" || return 1
+  capture_config_value /usr/bin/plutil -extract workspaceDirectories raw -expect array -n -o - - <<< "$EFFECTIVE_CONFIG" || return 1
+  count="$CONFIG_VALUE"
   for (( index=0; index<count; index++ )); do
-    value="$(/usr/bin/plutil -extract "workspaceDirectories.$index" raw -expect string -o - - <<< "$EFFECTIVE_CONFIG")" || return 1
-    WORKSPACE_DIRECTORIES+=("$value")
+    capture_config_value /usr/bin/plutil -extract "workspaceDirectories.$index" raw -expect string -n -o - - <<< "$EFFECTIVE_CONFIG" || return 1
+    WORKSPACE_DIRECTORIES+=("$CONFIG_VALUE")
   done
 }

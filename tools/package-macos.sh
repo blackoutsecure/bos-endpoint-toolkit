@@ -31,7 +31,7 @@ PACKAGE_ROOT="$ROOT/output/devbox/macos/package-root"
 VERSION="$(/usr/bin/plutil -extract versions.macos raw -expect string -o - "$ROOT/output/devbox/service.json")"
 OUTPUT="$ROOT/output/devbox/macos/bos-devbox-$VERSION.pkg"
 if [[ "$UNSIGNED" == true ]]; then OUTPUT="${OUTPUT%.pkg}-unsigned.pkg"; fi
-STAGING="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/bos-devbox-pkg.XXXXXX")"
+STAGING="$(/usr/bin/mktemp -d "$ROOT/output/devbox/macos/.bos-devbox-pkg.XXXXXX")"
 cleanup(){ /bin/rm -rf "$STAGING"; }
 trap cleanup EXIT
 
