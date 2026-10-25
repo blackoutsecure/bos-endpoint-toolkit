@@ -66,9 +66,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          & .\services\devbox\windows\tests\configuration.ps1
-          & .\services\devbox\windows\tests\resize-devbox.ps1
-          & .\services\devbox\windows\tests\scheduled-task.ps1
+          powershell.exe -NoProfile -NonInteractive -File .\services\devbox\windows\tests\configuration.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows configuration mocks failed.' }
+          powershell.exe -NoProfile -NonInteractive -File .\services\devbox\windows\tests\resize-devbox.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows resize/storage mocks failed.' }
+          powershell.exe -NoProfile -NonInteractive -File .\services\devbox\windows\tests\scheduled-task.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows scheduled-task mocks failed.' }
       - name: Linux and macOS hash and dispatch contracts
         if: runner.os != 'Windows'
         run: bash services/devbox/macos/tests/contracts.sh

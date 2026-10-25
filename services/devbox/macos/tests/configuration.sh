@@ -15,10 +15,22 @@ for key in $(env | sed -n 's/^\(DEVBOX_[A-Z_]*\)=.*/\1/p'); do unset "$key"; don
 bash "$SCRIPT" config > "$WORK/default.json"
 [[ "$(/usr/bin/plutil -extract macos.sizeGB raw -o - "$WORK/default.json")" == 100 ]]
 [[ "$(/usr/bin/plutil -extract windows.sizeGiB raw -o - "$WORK/default.json")" == 100 ]]
-printf '{"schemaVersion":1.0,"retention":21.0,"macos":{"sizeGB":200.0,"hideVolume":true}}\n' > "$WORK/profile.json"
+cat > "$WORK/profile.json" <<'JSON'
+{
+  "schemaVersion": 1.0,
+  "retention": 21.0,
+  "workspaceDirectories": ["native-fixture"],
+  "windows": {"sizeGiB": 150.0},
+  "macos": {"sizeGB": 200.0, "hideVolume": true, "volumeLabel": "Workspace Tools"}
+}
+JSON
 bash "$SCRIPT" --config "$WORK/profile.json" config > "$WORK/resolved.json"
 [[ "$(/usr/bin/plutil -extract retention raw -o - "$WORK/resolved.json")" == 21 ]]
 [[ "$(/usr/bin/plutil -extract macos.hideVolume raw -o - "$WORK/resolved.json")" == true ]]
+[[ "$(/usr/bin/plutil -extract macos.sizeGB raw -o - "$WORK/resolved.json")" == 200 ]]
+[[ "$(/usr/bin/plutil -extract macos.volumeLabel raw -o - "$WORK/resolved.json")" == 'Workspace Tools' ]]
+[[ "$(/usr/bin/plutil -extract windows.sizeGiB raw -o - "$WORK/resolved.json")" == 150 ]]
+[[ "$(/usr/bin/plutil -extract workspaceDirectories.0 raw -o - "$WORK/resolved.json")" == native-fixture ]]
 mkdir -p "$HOME/Library/Application Support/devbox"
 cp "$WORK/resolved.json" "$HOME/Library/Application Support/devbox/desired-config.json"
 bash "$SCRIPT" config > "$WORK/reloaded.json"
@@ -36,6 +48,25 @@ bash "$WORK/custom-cli.sh" config > "$WORK/custom.json"
 [[ "$(/usr/bin/plutil -extract name raw -o - "$WORK/custom.json")" == custom-devbox ]]
 [[ "$(/usr/bin/plutil -extract retention raw -o - "$WORK/custom.json")" == 9 ]]
 printf 'PASS custom packaged names discover only their own installed desired configuration\n'
+
+LEGACY_HOME="$WORK/legacy-home"
+LEGACY_STATE="$LEGACY_HOME/Library/Application Support/devbox/config.plist"
+mkdir -p "$(dirname "$LEGACY_STATE")"
+/usr/bin/plutil -create xml1 "$LEGACY_STATE"
+/usr/bin/plutil -insert schemaVersion -integer 3 "$LEGACY_STATE"
+/usr/bin/plutil -insert retention -integer 19 "$LEGACY_STATE"
+/usr/bin/plutil -insert hideVolume -bool true "$LEGACY_STATE"
+/usr/bin/plutil -insert mountPoint -string '/Volumes/Legacy Workspace' "$LEGACY_STATE"
+HOME="$LEGACY_HOME" bash "$SCRIPT" config > "$WORK/legacy.json"
+[[ "$(/usr/bin/plutil -extract retention raw -o - "$WORK/legacy.json")" == 19 ]]
+[[ "$(/usr/bin/plutil -extract macos.hideVolume raw -o - "$WORK/legacy.json")" == true ]]
+[[ "$(/usr/bin/plutil -extract macos.volumeLabel raw -o - "$WORK/legacy.json")" == 'Legacy Workspace' ]]
+[[ "$(/usr/bin/plutil -extract windows.sizeGiB raw -o - "$WORK/legacy.json")" == 100 ]]
+/usr/bin/plutil -replace schemaVersion -integer 99 "$LEGACY_STATE"
+if HOME="$LEGACY_HOME" bash "$SCRIPT" config > "$WORK/invalid-legacy.log" 2>&1; then
+  echo 'ERROR: Unsupported legacy state schema was accepted.' >&2; exit 1
+fi
+printf 'PASS legacy scalar settings are preserved and unsupported state schemas are rejected\n'
 
 for invalid in \
   '{}' 'null' '[]' '[{"schemaVersion":1}]' '{"schemaVersion":2}' '{"schemaVersion":"1"}' \

@@ -112,7 +112,8 @@ bash services/devbox/macos/tests/configuration.sh
 bash tools/package-macos.sh --unsigned
 ```
 
-The configuration suite never calls launchctl. Unsigned PKGs are validation
+The configuration suite covers typed scalar/array overrides and legacy-state
+migration without calling launchctl. Unsigned PKGs are validation
 artifacts only. Never install one on a configured workstation as a shortcut.
 
 When changing workflows, also run:

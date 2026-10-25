@@ -9,10 +9,11 @@ config_error(){ /usr/bin/printf 'ERROR: Configuration: %s\n' "$1" >&2; return 1;
 
 validate_config_json(){
   local document="$1" remaining="$1" key type minimum maximum pattern min_items env_key value count index entry seen object
-  /usr/bin/plutil -extract schemaVersion json -o - - <<< "$document" >/dev/null \
+  # Scalar plist values cannot be serialized as top-level JSON.
+  /usr/bin/plutil -extract schemaVersion xml1 -o - - <<< "$document" >/dev/null \
     || { config_error 'schemaVersion: 1 is required'; return 1; }
   while IFS='|' read -r key type minimum maximum pattern min_items env_key; do
-    if ! value="$(/usr/bin/plutil -extract "$key" json -o - - <<< "$document" 2>/dev/null)"; then continue; fi
+    if ! value="$(/usr/bin/plutil -extract "$key" xml1 -o - - <<< "$document" 2>/dev/null)"; then continue; fi
     if [[ "$type" == integer ]]; then
       if ! value="$(/usr/bin/plutil -extract "$key" raw -expect integer -o - - <<< "$document" 2>/dev/null)"; then
         value="$(/usr/bin/plutil -extract "$key" raw -expect float -o - - <<< "$document")" \
@@ -51,8 +52,8 @@ validate_config_json(){
   done <<< "$DEVBOX_CONFIGURATION_FIELDS"
   for object in windows macos; do
     if /usr/bin/plutil -extract "$object" xml1 -o - - <<< "$remaining" >/dev/null 2>&1; then
-      count="$(/usr/bin/plutil -extract "$object" raw -expect dict -o - - <<< "$remaining")" || return 1
-      [[ "$count" == 0 ]] || { config_error "Unknown keys in $object"; return 1; }
+      value="$(/usr/bin/plutil -extract "$object" json -expect dictionary -o - - <<< "$remaining" | /usr/bin/tr -d '[:space:]')" || return 1
+      [[ "$value" == '{}' ]] || { config_error "Unknown keys in $object"; return 1; }
       remaining="$(/usr/bin/plutil -remove "$object" -o - - <<< "$remaining")" || return 1
     fi
   done
@@ -89,8 +90,8 @@ resolve_devbox_config(){
         hideVolume:macos.hideVolume autoRestore:macos.autoRestore \
         conditionalInstallBackup:macos.conditionalInstallBackup backupAfterRestore:macos.backupAfterRestore; do
         old_key="${mapping%%:*}"; key="${mapping#*:}"
-        if value="$(/usr/bin/plutil -extract "$old_key" json -o - "$legacy" 2>/dev/null)"; then
-          EFFECTIVE_CONFIG="$(/usr/bin/plutil -replace "$key" -json "$value" -o - - <<< "$EFFECTIVE_CONFIG")" || return 1
+        if value="$(/usr/bin/plutil -extract "$old_key" xml1 -o - "$legacy" 2>/dev/null)"; then
+          EFFECTIVE_CONFIG="$(/usr/bin/plutil -replace "$key" -xml "$value" -o - - <<< "$EFFECTIVE_CONFIG")" || return 1
         fi
       done
       if value="$(/usr/bin/plutil -extract mountPoint raw -expect string -o - "$legacy" 2>/dev/null)"; then
@@ -102,8 +103,8 @@ resolve_devbox_config(){
     fi
   fi
   while IFS='|' read -r key type minimum maximum pattern min_items env_key; do
-    if [[ -n "$override" ]] && value="$(/usr/bin/plutil -extract "$key" json -o - - <<< "$override" 2>/dev/null)"; then
-      EFFECTIVE_CONFIG="$(/usr/bin/plutil -replace "$key" -json "$value" -o - - <<< "$EFFECTIVE_CONFIG")" || return 1
+    if [[ -n "$override" ]] && value="$(/usr/bin/plutil -extract "$key" xml1 -o - - <<< "$override" 2>/dev/null)"; then
+      EFFECTIVE_CONFIG="$(/usr/bin/plutil -replace "$key" -xml "$value" -o - - <<< "$EFFECTIVE_CONFIG")" || return 1
     fi
     if [[ -n "$env_key" ]] && value="$(/usr/bin/printenv "$env_key")"; then
       case "$type" in
