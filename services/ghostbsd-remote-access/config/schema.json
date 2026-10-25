@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:blackoutsecure:endpoint-toolkit:ghostbsd-remote-access:1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion"],
+  "properties": {
+    "schemaVersion": {"type": "integer", "minimum": 1, "maximum": 1},
+    "platform": {"type": "string", "pattern": "^(auto|virtualbox|hyperv|physical)$"},
+    "sshPort": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "rdpPort": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "hostName": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$"},
+    "hostSshPort": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "localRdpPort": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "videoMemoryMiB": {"type": "integer", "minimum": 16, "maximum": 256}
+  }
+}

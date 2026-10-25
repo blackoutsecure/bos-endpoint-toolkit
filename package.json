@@ -1,0 +1,24 @@
+{
+  "name": "bos-endpoint-toolkit",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "build:rust": "cargo build --workspace --release --locked",
+    "test": "node --test tools/tests/*.test.mjs",
+    "test:rust": "cargo test --workspace --locked",
+    "check": "node tools/check.mjs",
+    "check:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings"
+  },
+  "devDependencies": {
+    "ajv": "8.20.0",
+    "markdownlint": "0.42.0"
+  },
+  "overrides": {
+    "katex": "0.19.0"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "name": "devbox",
+  "backupHour": 2,
+  "backupMinute": 0,
+  "retention": 14,
+  "workspaceDirectories": [
+    "repos",
+    "projects",
+    "agent-workspaces",
+    "ai",
+    "data",
+    "tools",
+    "scripts",
+    "temp",
+    "package-caches",
+    "build-output",
+    "docker",
+    "archives"
+  ],
+  "windows": {
+    "sizeGiB": 100,
+    "volumeLabel": "devbox",
+    "preferredDriveLetters": ["V", "W", "X", "Y", "Z"]
+  },
+  "macos": {
+    "sizeGB": 100,
+    "volumeLabel": "devbox",
+    "launchdPrefix": "com.blackoutsecure.devbox",
+    "repairMount": true,
+    "hideVolume": false,
+    "backupIfOverdueHours": 36,
+    "autoRestore": true,
+    "restoreSearchAllMachines": true,
+    "verifyBackupHash": true,
+    "allowBackupWithoutMetadata": true,
+    "validateBackupMount": true,
+    "verifyPostBackupHash": true,
+    "conditionalInstallBackup": true,
+    "backupAfterRestore": false
+  }
+}

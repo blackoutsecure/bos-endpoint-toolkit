@@ -8,3 +8,5 @@ Thumbs.db
 *.log
 reports/
 output/
+node_modules/
+/target/
