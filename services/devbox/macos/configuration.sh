@@ -106,7 +106,9 @@ resolve_devbox_config(){
           EFFECTIVE_CONFIG="$(/usr/bin/plutil -replace "$key" -xml "$value" -o - - <<< "$EFFECTIVE_CONFIG")" || return 1
         fi
       done
-      if capture_config_value /usr/bin/plutil -extract mountPoint raw -expect string -n -o - "$legacy" 2>/dev/null; then
+      if /usr/bin/plutil -extract mountPoint xml1 -o - "$legacy" >/dev/null 2>&1; then
+        capture_config_value /usr/bin/plutil -extract mountPoint raw -expect string -n -o - "$legacy" \
+          || { config_error 'Legacy mountPoint must be a string'; return 1; }
         value="$CONFIG_VALUE"
         [[ "$value" == /Volumes/* ]] || { config_error 'Unexpected legacy mount point'; return 1; }
         EFFECTIVE_CONFIG="$(/usr/bin/plutil -replace macos.volumeLabel -string "${value#/Volumes/}" -o - - <<< "$EFFECTIVE_CONFIG")" || return 1

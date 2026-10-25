@@ -202,7 +202,8 @@ pub fn plan(
         }
         _ => return Err(Error::UnsupportedBackend { service, platform }),
     };
-    let requires_artifact_rebuild = service == Service::GhostbsdRemoteAccess && profile.is_some();
+    let requires_artifact_rebuild = service == Service::GhostbsdRemoteAccess
+        && (profile.is_some() || !configuration.is_packaged_default()?);
     if requires_artifact_rebuild {
         warnings.push("Rebuild this service's native artifacts with the same profile before using these adapter arguments; native Remote Access does not consume runtime JSON.");
     }
@@ -347,6 +348,33 @@ mod tests {
             plan.configuration_delivery,
             ConfigurationDelivery::BuildTimeProfile
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn in_memory_remote_profiles_only_rebuild_when_non_default() -> Result<(), Error> {
+        for platform in Service::GhostbsdRemoteAccess.platforms() {
+            for (profile, expected) in [
+                (None, false),
+                (Some(r#"{"schemaVersion":1}"#), false),
+                (Some(r#"{"schemaVersion":1,"rdpPort":3390}"#), true),
+            ] {
+                let plan = plan(
+                    resolve_configuration(Service::GhostbsdRemoteAccess, profile)?,
+                    *platform,
+                    Operation::Apply,
+                    Some("fixture"),
+                    None,
+                )?;
+                assert_eq!(plan.requires_artifact_rebuild, expected);
+                assert_eq!(
+                    plan.warnings
+                        .iter()
+                        .any(|warning| warning.starts_with("Rebuild")),
+                    expected
+                );
+            }
+        }
         Ok(())
     }
 

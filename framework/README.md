@@ -193,7 +193,8 @@ still owns actual account/home lookup and permission checks.
 
 Apply plans include native preview flags only where implemented: Windows
 `-WhatIf` or GhostBSD `--dry-run`. macOS's resize-only preview is not presented
-as a complete install preview. A remote-access profile sets
+as a complete install preview. A remote-access profile path or non-default
+in-memory configuration sets
 `requiresArtifactRebuild: true` instead of inventing a runtime JSON flag.
 Linux backend combinations fail even though the read-only CLI itself can run
 on Linux. Native Windows status words/exit codes remain owned by their adapters.

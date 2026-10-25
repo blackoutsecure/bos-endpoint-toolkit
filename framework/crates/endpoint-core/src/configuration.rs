@@ -21,6 +21,11 @@ impl Configuration {
         &self.0
     }
 
+    pub(crate) fn is_packaged_default(&self) -> Result<bool, Error> {
+        let (_, defaults) = documents(self.service());
+        Ok(serde_json::to_value(self)? == serde_json::from_str::<Value>(defaults)?)
+    }
+
     pub const fn service(&self) -> Service {
         match &self.0 {
             ConfigurationValues::Devbox(_) => Service::Devbox,
