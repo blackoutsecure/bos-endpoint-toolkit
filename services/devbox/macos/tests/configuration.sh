@@ -8,6 +8,7 @@ SCRIPT="$ROOT/output/devbox/macos/manage-devbox.sh"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/bos-devbox-config.XXXXXX")"
 cleanup(){ rm -rf "$WORK"; }
 trap cleanup EXIT
+trap 'printf "ERROR: macOS configuration contract failed at line %s\n" "$LINENO" >&2' ERR
 export HOME="$WORK/home"
 mkdir -p "$HOME"
 for key in $(env | sed -n 's/^\(DEVBOX_[A-Z_]*\)=.*/\1/p'); do unset "$key"; done
@@ -34,7 +35,9 @@ bash "$SCRIPT" --config "$WORK/profile.json" config > "$WORK/resolved.json"
 mkdir -p "$HOME/Library/Application Support/devbox"
 cp "$WORK/resolved.json" "$HOME/Library/Application Support/devbox/desired-config.json"
 bash "$SCRIPT" config > "$WORK/reloaded.json"
-cmp "$WORK/resolved.json" "$WORK/reloaded.json"
+/usr/bin/plutil -convert json -r -o "$WORK/resolved.sorted.json" "$WORK/resolved.json"
+/usr/bin/plutil -convert json -r -o "$WORK/reloaded.sorted.json" "$WORK/reloaded.json"
+cmp "$WORK/resolved.sorted.json" "$WORK/reloaded.sorted.json"
 DEVBOX_SIZE_GB=08 DEVBOX_RETENTION=7 bash "$SCRIPT" config > "$WORK/environment.json"
 [[ "$(/usr/bin/plutil -extract macos.sizeGB raw -o - "$WORK/environment.json")" == 8 ]]
 [[ "$(/usr/bin/plutil -extract retention raw -o - "$WORK/environment.json")" == 7 ]]
