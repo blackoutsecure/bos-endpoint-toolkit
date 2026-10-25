@@ -60,7 +60,10 @@ expect_code 2 main --user fixture --platform unknown --dry-run apply
 expect_code 2 main --user fixture --key-tested ssh
 expect_code 2 main --user fixture --keys-only rdp
 expect_code 2 main --user fixture wizard </dev/null
-expect_code 2 main --user
+for flag in --user --platform --public-key --sudoers-file; do
+  expect_code 2 main "$flag"
+  expect_code 2 main "$flag" ''
+done
 expect_code 2 main --user fixture status apply
 expect_code 2 main --firewall-disable
 

@@ -40,8 +40,13 @@ live_called=false
 backup_called=false
 validate_backup_artifact(){ live_called=true; return 1; }
 verify_backup(){ backup_called=true; return 0; }
+# Capture the expected failure without relying on source/errexit interactions.
+set +e
 # shellcheck source=/dev/null
-if source "$WORK/dispatch.sh"; then echo 'ERROR: Invalid live image was reported as valid.' >&2; exit 1; fi
+source "$WORK/dispatch.sh"
+result=$?
+set -e
+if (( result != 1 )); then echo "ERROR: Invalid live image returned unexpected status $result." >&2; exit 1; fi
 [[ "$live_called" == true && "$backup_called" == false ]]
 COMMAND_ARGUMENT=selected-backup
 # shellcheck source=/dev/null

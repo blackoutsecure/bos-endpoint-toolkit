@@ -37,10 +37,21 @@ jobs:
         run: npm run test:rust
       - name: Build standalone read-only Rust CLI
         run: npm run build:rust
-      - name: Install ShellCheck on Windows
+      - name: Install pinned ShellCheck on Windows
         if: runner.os == 'Windows'
-        shell: powershell
-        run: choco install shellcheck --version=0.10.0 --yes --no-progress
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Archive = Join-Path $env:RUNNER_TEMP 'shellcheck-v0.10.0.zip'
+          $Destination = Join-Path $env:RUNNER_TEMP 'shellcheck-v0.10.0'
+          Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Uri 'https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.zip' -OutFile $Archive
+          if ((Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash -ne 'EB6CD53A54EA97A56540E9D296CE7E2FA68715AA507FF23574646C1E12B2E143') {
+            throw 'ShellCheck archive checksum mismatch.'
+          }
+          Expand-Archive -LiteralPath $Archive -DestinationPath $Destination
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $Destination -Encoding UTF8
+          & (Join-Path $Destination 'shellcheck.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw 'ShellCheck failed to start.' }
       - name: Install ShellCheck on macOS
         if: runner.os == 'macOS'
         run: brew list shellcheck >/dev/null 2>&1 || brew install shellcheck

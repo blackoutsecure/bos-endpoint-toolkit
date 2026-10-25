@@ -31,6 +31,8 @@ against sources and the generated macOS payload. Markdownlint uses its API and
 the explicit source inventory rather than CLI glob dependencies; the patched
 KaTeX override is covered by a parser compatibility test. On Windows it uses Git for
 Windows Bash, not WSL; set `BOS_BASH` if Git is installed elsewhere.
+Windows CI installs the official ShellCheck 0.10.0 ZIP after verifying its pinned
+SHA-256, without an elevated package-manager installation.
 Package unit tests mock Apple command boundaries and exercise release-gate
 failure propagation without invoking Apple tools or installing a package.
 They do not prove native signing, notarization, or PKG behavior.

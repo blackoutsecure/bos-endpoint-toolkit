@@ -445,7 +445,7 @@ main() {
     argument="$1"; shift
     case "$argument" in
       --user|--platform|--public-key|--sudoers-file)
-        (( $# )) && [[ -n "$1" ]] || die "Missing value for $argument."
+        if (( $# == 0 )) || [[ -z "$1" ]]; then die "Missing value for $argument."; fi
         case "$argument" in
           --user) TARGET_USER="$1" ;;
           --platform) PLATFORM="$1" ;;
