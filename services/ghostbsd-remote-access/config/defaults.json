@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "platform": "auto",
+  "sshPort": 22,
+  "rdpPort": 3389,
+  "hostName": "127.0.0.1",
+  "hostSshPort": 2222,
+  "localRdpPort": 13389,
+  "videoMemoryMiB": 128
+}

@@ -1,0 +1,7 @@
+{
+  "name": "devbox",
+  "versions": {
+    "windows": "2.2.0",
+    "macos": "3.6.0"
+  }
+}
