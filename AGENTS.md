@@ -92,8 +92,9 @@ Never report a skipped/unavailable native check as passed.
 
 ## Organization conventions
 
-`dev` is the development/default branch. `main` is promoted stable runtime;
-promotion/tags are hub-managed. Do not push directly to main or move tags.
+`main` is the default and only long-lived branch. Use short-lived feature
+branches and reviewed pull requests; a permanent `dev` branch is not needed.
+Preserve configured release automation. Do not push directly to main or move tags.
 Pin remote step actions to full SHAs with version comments. Do not bypass
 required reviews/checks.
 
