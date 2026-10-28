@@ -1,5 +1,9 @@
 # Blackout Secure Endpoint Toolkit
 
+Source: [blackoutsecure/endpoint-toolkit](https://github.com/blackoutsecure/endpoint-toolkit).
+The source-repository rename does not change the `bos-endpoint-toolkit` CLI,
+crate/package identities, endpoint installed paths or service contracts.
+
 [![Made by BlackoutSecure](https://img.shields.io/badge/made%20by-BlackoutSecure-1f1f1f)](https://github.com/blackoutsecure)
 
 Service-first endpoint automation with shared configuration contracts and native
